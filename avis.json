@@ -1,0 +1,10 @@
+[{
+  "_id": "AVIS001",
+  "produit_id": "PROD001",
+  "utilisateur": "client001",
+  "note": 5,
+  "commentaire": "Excellent processeur pour le gaming",
+  "date": {
+    "$date": "2026-11-17T10:00:00.000Z"
+  }
+}]

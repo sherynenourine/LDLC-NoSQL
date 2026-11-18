@@ -1,0 +1,66 @@
+[{
+  "_id": "PROD001",
+  "nom": "AMD Ryzen 7 7800X3D",
+  "categorie": "Processeur",
+  "marque": "AMD",
+  "prix": 399.99,
+  "stock": 25,
+  "specifications": {
+    "socket": "AM5",
+    "coeurs": 8,
+    "threads": 16,
+    "frequence_ghz": 4.2,
+    "cache_mb": 96
+  },
+  "tags": [
+    "Gaming",
+    "AMD",
+    "Ryzen"
+  ],
+  "produits_compatibles": [
+    "PROD003"
+  ]
+},
+{
+  "_id": "PROD002",
+  "nom": "Samsung Odyssey G5 27 pouces",
+  "categorie": "Ecran",
+  "marque": "Samsung",
+  "prix": 249.99,
+  "stock": 40,
+  "specifications": {
+    "taille_pouces": 27,
+    "resolution": "2560x1440",
+    "frequence_hz": 144,
+    "type_dalle": "VA",
+    "connectique": [
+      "HDMI",
+      "DisplayPort"
+    ]
+  },
+  "tags": [
+    "Gaming",
+    "Ecran",
+    "QHD"
+  ]
+},
+{
+  "_id": "PROD003",
+  "nom": "MSI B650 Gaming Plus WiFi",
+  "categorie": "Carte mere",
+  "marque": "MSI",
+  "prix": 189.99,
+  "stock": 30,
+  "specifications": {
+    "socket": "AM5",
+    "chipset": "B650",
+    "format": "ATX",
+    "type_memoire": "DDR5",
+    "wifi": true
+  },
+  "tags": [
+    "Gaming",
+    "Carte mere",
+    "AMD"
+  ]
+}]
