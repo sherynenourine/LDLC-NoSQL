@@ -1,50 +1,97 @@
 
-## 2. Architecture globale
+## 3. Lot 1 — MongoDB : catalogue produits
 
-### 2.1. Principe de persistance polyglotte
+### 3.1. Besoin métier et choix technologique
 
-L'architecture proposée repose sur la persistance polyglotte, qui consiste à utiliser plusieurs technologies de stockage spécialisées au sein d'un même système d'information.
+Le catalogue LDLC regroupe des produits informatiques aux caractéristiques hétérogènes. Un processeur possède un nombre de cœurs et un socket, tandis qu'un écran possède une résolution et une fréquence de rafraîchissement.
 
-Dans notre projet LDLC, quatre bases NoSQL ont été sélectionnées en fonction des besoins métier et des types de données manipulées.
+MongoDB est une base NoSQL orientée documents. Elle permet de stocker des objets JSON avec des structures flexibles, sans imposer les mêmes champs à tous les produits.
 
-| Technologie | Modèle NoSQL | Rôle dans le projet |
-|---|---|---|
-| MongoDB | Documents | Catalogue produits et avis clients |
-| Redis | Clé-valeur | Paniers et sessions utilisateurs |
-| Cassandra | Wide-column | Événements, logs et statistiques |
-| Neo4j | Graphe | Relations et recommandations produits |
+La base créée pour ce lot est `ldlc_nosql`. Elle comporte deux collections principales :
+- `produits` : informations du catalogue.
+- `avis` : évaluations et commentaires des clients.
 
-### 2.2. Organisation de l'architecture
+### 3.2. Modélisation des données
 
-L'architecture cible comprend trois niveaux :
+Chaque produit possède un identifiant unique `_id`, un nom, une catégorie, une marque, un prix et un stock.
 
-1. **Interface utilisateur** : permet de consulter les produits, de gérer un panier et de visualiser des recommandations.
-2. **Backend / API** : représente la couche applicative qui reçoit les demandes des utilisateurs et interroge les bases concernées.
-3. **Bases de données NoSQL** : assurent le stockage et l'accès aux données selon leur spécialisation.
+Le champ `specifications` est un sous-document dont les propriétés dépendent de la catégorie du produit. Le champ `tags` contient des mots-clés permettant de caractériser le produit.
 
-Le backend présenté dans cette architecture est conceptuel. Il n'a pas été développé dans le cadre du projet.
+Exemple de document :
 
-Le schéma détaillé est disponible dans le fichier `docs/architecture.md`.
+```json
+{
+  "_id": "PROD001",
+  "nom": "AMD Ryzen 7 7800X3D",
+  "categorie": "Processeur",
+  "marque": "AMD",
+  "prix": 399.99,
+  "stock": 25,
+  "specifications": {
+    "socket": "AM5",
+    "coeurs": 8,
+    "threads": 16,
+    "frequence_ghz": 4.2,
+    "cache_mb": 96
+  },
+  "tags": ["Gaming", "AMD", "Ryzen"],
+  "produits_compatibles": ["PROD003"]
+}
+```
 
-### 2.3. Justification des choix technologiques
+### 3.3. Choix Embedded et References
 
-**MongoDB** a été retenu pour la flexibilité de son modèle documentaire. Les caractéristiques des produits informatiques peuvent varier selon leur catégorie : processeur, écran ou carte mère.
+Deux stratégies de modélisation ont été utilisées.
 
-**Redis** permet un accès rapide aux données temporaires des paniers et sessions. Les mécanismes d'expiration TTL facilitent leur gestion.
+**Embedded :** les caractéristiques techniques sont intégrées directement dans chaque document `produits`, grâce au champ `specifications`. Cette approche permet de récupérer les informations du produit en une seule lecture.
 
-**Cassandra** est adapté au stockage de nombreux événements et à leur consultation selon des critères connus à l'avance. Son modèle de données privilégie les requêtes métier et les écritures distribuées.
+**References :** les avis sont conservés dans une collection distincte `avis`, avec un champ `produit_id` permettant de retrouver le produit concerné. Cela évite d'augmenter indéfiniment la taille des documents produits lorsque les clients publient de nouveaux avis.
 
-**Neo4j** permet de représenter les relations entre produits sous forme de graphe. Les liens de compatibilité, de similarité et d'achat conjoint peuvent être exploités pour produire des recommandations.
+Les compatibilités sont représentées par un tableau d'identifiants `produits_compatibles`. Par exemple, `PROD001` référence `PROD003`, une carte mère compatible.
 
-### 2.4. Échanges et limites
+### 3.4. Requêtes et index
 
-Dans l'architecture cible, chaque opération métier interroge la base correspondant à son besoin. Par exemple, la consultation d'un produit exploite MongoDB, tandis que la recherche de produits compatibles utilise Neo4j.
+Exemple de recherche de processeurs AMD :
 
-Les identifiants produits communs, tels que `PROD001` et `PROD003`, permettent de faire correspondre les données entre les différentes bases.
+```javascript
+db.produits.find({
+  categorie: "Processeur",
+  marque: "AMD"
+})
+```
 
-Cette organisation implique cependant des contraintes :
-- La cohérence entre les bases doit être gérée par la couche applicative.
-- Certaines informations peuvent être dupliquées pour optimiser les lectures.
-- Il n'existe pas de transaction globale automatiquement garantie entre les quatre technologies.
+Exemple de filtrage sur une caractéristique technique :
 
-Dans ce projet, les quatre bases ont été mises en place et testées séparément avec Docker. Leur intégration applicative complète reste une évolution possible.
+```javascript
+db.produits.find({
+  "specifications.socket": "AM5"
+})
+```
+
+Exemple de récupération des avis associés à un produit :
+
+```javascript
+db.produits.aggregate([
+  {
+    $lookup: {
+      from: "avis",
+      localField: "_id",
+      foreignField: "produit_id",
+      as: "avis_clients"
+    }
+  }
+])
+```
+
+Un index sur `avis.produit_id` a été créé pour accélérer les recherches d'avis par produit.
+
+Les données et les requêtes de ce lot sont disponibles dans le dossier `mongodb/` du dépôt GitHub.
+
+### 3.5. Compromis techniques
+
+Le modèle documentaire est adapté aux produits possédant des caractéristiques variables et facilite l'évolution du catalogue.
+
+Cependant, les références entre collections nécessitent parfois des opérations de jointure avec `$lookup`. De plus, MongoDB ne garantit pas automatiquement l'intégrité des références entre documents : leur cohérence doit être contrôlée par l'application.
+
+Pour ce projet, la séparation des avis et l'intégration des spécifications représentent un compromis entre simplicité de lecture, souplesse et évolutivité.
+```
