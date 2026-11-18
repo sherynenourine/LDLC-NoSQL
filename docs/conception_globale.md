@@ -1,93 +1,68 @@
 
-## 6. Lot 4 — Neo4j : recommandations produits
+## 7. Analyse transversale — CAP, cohérence et compromis
 
-### 6.1. Besoin métier et choix technologique
+### 7.1. Comparaison des quatre technologies
 
-Une plateforme e-commerce doit pouvoir recommander des produits pertinents à ses clients. Ces recommandations peuvent reposer sur la compatibilité entre composants, la similarité des caractéristiques ou les achats fréquemment réalisés ensemble.
+L'architecture LDLC repose sur quatre technologies NoSQL complémentaires, chacune répondant à un besoin métier spécifique.
 
-Neo4j est une base NoSQL orientée graphe qui permet de représenter les entités sous forme de nœuds et leurs relations sous forme de liens.
+| Critère | MongoDB | Redis | Cassandra | Neo4j |
+|---|---|---|---|---|
+| Modèle | Documents | Clé-valeur | Wide-column | Graphe |
+| Usage principal | Catalogue | Paniers et sessions | Logs et analytics | Recommandations |
+| Point fort | Flexibilité du schéma | Faible latence | Écritures distribuées | Parcours de relations |
+| Limite principale | Gestion des références | Consommation mémoire | Modèle orienté requêtes | Synchronisation du graphe |
 
-Cette approche facilite l'exploration des connexions entre produits sans multiplier les jointures complexes.
+Cette spécialisation évite d'imposer un modèle de stockage unique à des données possédant des caractéristiques différentes.
 
-Dans notre projet, Neo4j est exécuté dans un conteneur Docker nommé `neo4j-ldlc`.
+### 7.2. Théorème CAP
 
-### 6.2. Modélisation du graphe
+Le théorème CAP indique qu'en présence d'une partition réseau, un système distribué ne peut pas garantir simultanément une cohérence forte et une disponibilité complète.
 
-Le graphe contient quatre nœuds `Produit`, correspondant aux références du catalogue MongoDB :
+Les compromis dépendent de l'architecture et de la configuration des technologies.
 
-| Identifiant | Produit |
-|---|---|
-| PROD001 | AMD Ryzen 7 7800X3D |
-| PROD002 | Samsung Odyssey G5 27 pouces |
-| PROD003 | MSI B650 Gaming Plus WiFi |
-| PROD004 | AMD Ryzen 5 7600X |
+**MongoDB :** dans un replica set, les mécanismes d'élection, les préférences de lecture et les niveaux de confirmation des écritures influencent la cohérence et la disponibilité. Une configuration privilégiant la cohérence peut refuser certaines opérations lorsqu'une majorité de nœuds n'est plus accessible.
 
-Trois types de relations ont été modélisés :
+**Redis :** le comportement dépend de son déploiement. Une instance unique ne permet pas d'illustrer directement un compromis CAP distribué. En configuration répliquée ou en cluster, les mécanismes de réplication et de basculement introduisent des compromis entre disponibilité et cohérence.
 
-- `COMPATIBLE_AVEC` : indique qu'un produit est compatible avec un autre.
-- `SIMILAIRE_A` : représente une similarité entre deux produits.
-- `ACHETE_AVEC` : indique que deux produits ont été achetés ensemble.
+**Cassandra :** sa conception distribuée privilégie la tolérance aux partitions et propose des niveaux de cohérence configurables. Le choix d'un niveau de cohérence plus élevé peut réduire la disponibilité de certaines opérations lors d'une panne réseau.
 
-Exemples de relations créées :
+**Neo4j :** en déploiement cluster, la gestion des écritures et de la réplication dépend du rôle des membres et des mécanismes de consensus. La disponibilité des écritures peut être affectée si le quorum nécessaire n'est plus accessible.
 
-```text
-PROD001 --COMPATIBLE_AVEC--> PROD003
-PROD001 --SIMILAIRE_A-----> PROD004
-PROD001 --ACHETE_AVEC-----> PROD003
-```
+Dans ce projet, les bases ont été testées dans des conteneurs Docker indépendants. Aucun scénario de partition réseau sur un cluster distribué n'a été réalisé.
 
-La relation `ACHETE_AVEC` possède une propriété `nombre_achats` fixée à 150 dans notre jeu de démonstration.
+### 7.3. Cohérence entre les bases
 
-### 6.3. Requêtes Cypher
+Les quatre bases utilisent des modèles de données différents, mais certains identifiants sont partagés.
 
-Neo4j utilise le langage Cypher pour créer et interroger les graphes.
+Par exemple, `PROD001` désigne le même processeur dans MongoDB et Neo4j.
 
-Exemple de recherche des produits compatibles avec `PROD001` :
+Une modification du catalogue MongoDB pourrait nécessiter une actualisation des données correspondantes dans Neo4j.
 
-```cypher
-MATCH (p:Produit {id: "PROD001"})-[:COMPATIBLE_AVEC]->(compatible:Produit)
-RETURN compatible;
-```
+De même, un panier Redis référence des produits dont les informations principales sont stockées dans MongoDB.
 
-Exemple de recherche des produits similaires :
+Dans une architecture de production, cette cohérence pourrait être assurée par une couche applicative ou par un mécanisme d'événements.
 
-```cypher
-MATCH (p:Produit {id: "PROD001"})-[:SIMILAIRE_A]->(similaire:Produit)
-RETURN similaire;
-```
+Cette synchronisation automatique n'a pas été implémentée dans le prototype.
 
-Exemple de récupération des produits achetés ensemble :
+### 7.4. Performance et évolutivité
 
-```cypher
-MATCH (p:Produit {id: "PROD001"})-[r:ACHETE_AVEC]->(autre:Produit)
-RETURN autre, r.nombre_achats;
-```
+Chaque technologie apporte un mécanisme d'optimisation différent :
 
-### 6.4. Recommandations pondérées
+- MongoDB utilise des index et des documents adaptés aux lectures du catalogue.
+- Redis conserve les données temporaires en mémoire et utilise des opérations rapides sur les Hash.
+- Cassandra organise ses données selon les clés de partition et les requêtes prévues.
+- Neo4j exploite les relations du graphe pour retrouver des produits connectés.
 
-Un système de recommandation a été testé en attribuant un poids aux différents types de relations.
+Ces mécanismes sont adaptés aux besoins identifiés, mais le prototype utilise un jeu de données réduit.
 
-Dans notre jeu de données, le calcul donne les résultats suivants :
+Aucun benchmark de charge permettant de comparer quantitativement les performances des quatre solutions n'a été réalisé.
 
-| Produit recommandé | Score |
-|---|---|
-| PROD003 — MSI B650 Gaming Plus WiFi | 8 |
-| PROD004 — AMD Ryzen 5 7600X | 2 |
+### 7.5. Bilan des compromis
 
-Le produit `PROD003` obtient le score le plus élevé car il est lié à `PROD001` par plusieurs relations pertinentes.
+Le principal avantage de la persistance polyglotte est d'employer une technologie adaptée à chaque domaine métier.
 
-Cette méthode constitue un prototype de recommandation basé sur des règles métiers. Il ne s'agit pas d'un modèle de machine learning entraîné sur des données réelles.
+En contrepartie, l'architecture devient plus complexe à administrer : plusieurs bases doivent être surveillées, sauvegardées et maintenues.
 
-### 6.5. Compromis techniques
+Elle nécessite également de gérer la circulation des données et leur cohérence entre les systèmes.
 
-Neo4j est particulièrement adapté aux recherches impliquant plusieurs relations entre entités.
-
-Il offre une représentation intuitive des compatibilités et facilite l'ajout de nouveaux types de relations.
-
-Cependant, le maintien d'une base graphe distincte implique une synchronisation avec le catalogue MongoDB. Les identifiants produits doivent notamment rester cohérents entre les deux bases.
-
-De plus, la pertinence des recommandations dépend de la qualité des relations et des pondérations définies.
-
-Dans ce projet, les relations et les scores ont été construits à partir d'un jeu de démonstration limité à quatre produits.
-
-Les requêtes Cypher sont disponibles dans `neo4j/requetes.cypher`, avec les explications du lot dans `docs/lot4_neo4j.md`.
+Le choix de quatre technologies est donc pertinent pour illustrer les différentes familles NoSQL, mais devrait être justifié par des besoins réels de performance, de volumétrie et de maintenance avant un déploiement en production.
