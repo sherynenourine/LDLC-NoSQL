@@ -1,0 +1,42 @@
+
+# PROJET LDLC - LOT 2 : PANIERS ET SESSIONS
+# Technologie : Redis
+
+# 1. Creer un panier utilisateur
+HSET panier:USER001 PROD001 1 PROD002 2
+
+# 2. Consulter le panier
+HGETALL panier:USER001
+
+# 3. Definir un TTL de 24 heures
+EXPIRE panier:USER001 86400
+
+# 4. Verifier le TTL
+TTL panier:USER001
+
+# 5. Ajouter un processeur
+HINCRBY panier:USER001 PROD001 1
+
+# 6. Retirer un ecran
+HINCRBY panier:USER001 PROD002 -1
+
+# 7. Renouveler le TTL apres modification
+EXPIRE panier:USER001 86400
+
+# 8. Creer une session utilisateur
+HSET session:SESSION001 user_id USER001 statut connecte role client
+
+# 9. Definir un TTL de 30 minutes
+EXPIRE session:SESSION001 1800
+
+# 10. Consulter la session
+HGETALL session:SESSION001
+
+# 11. Verifier le TTL de la session
+TTL session:SESSION001
+
+# 12. Simuler une deconnexion
+DEL session:SESSION001
+
+# 13. Verifier la suppression
+TTL session:SESSION001
