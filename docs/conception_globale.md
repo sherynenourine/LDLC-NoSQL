@@ -1,97 +1,94 @@
 
-## 3. Lot 1 — MongoDB : catalogue produits
+## 4. Lot 2 — Redis : paniers et sessions utilisateurs
 
-### 3.1. Besoin métier et choix technologique
+### 4.1. Besoin métier et choix technologique
 
-Le catalogue LDLC regroupe des produits informatiques aux caractéristiques hétérogènes. Un processeur possède un nombre de cœurs et un socket, tandis qu'un écran possède une résolution et une fréquence de rafraîchissement.
+Une plateforme e-commerce doit permettre aux utilisateurs d'ajouter des produits à leur panier, de modifier leurs quantités et de conserver une session pendant leur navigation.
 
-MongoDB est une base NoSQL orientée documents. Elle permet de stocker des objets JSON avec des structures flexibles, sans imposer les mêmes champs à tous les produits.
+Ces données sont fréquemment consultées et modifiées. Elles nécessitent un accès rapide et peuvent avoir une durée de vie limitée.
 
-La base créée pour ce lot est `ldlc_nosql`. Elle comporte deux collections principales :
-- `produits` : informations du catalogue.
-- `avis` : évaluations et commentaires des clients.
+Redis est une base NoSQL clé-valeur principalement utilisée en mémoire. Elle est adaptée à ce besoin grâce à ses faibles latences, ses structures de données et son mécanisme d'expiration automatique.
 
-### 3.2. Modélisation des données
+Dans ce projet, Redis est exécuté dans un conteneur Docker nommé `redis-ldlc`.
 
-Chaque produit possède un identifiant unique `_id`, un nom, une catégorie, une marque, un prix et un stock.
+### 4.2. Modélisation des paniers
 
-Le champ `specifications` est un sous-document dont les propriétés dépendent de la catégorie du produit. Le champ `tags` contient des mots-clés permettant de caractériser le produit.
+Les paniers sont stockés sous forme de Hash Redis.
 
-Exemple de document :
+Chaque panier possède une clé construite selon le modèle `panier:USER_ID`. Les champs correspondent aux identifiants des produits et les valeurs aux quantités sélectionnées.
 
-```json
-{
-  "_id": "PROD001",
-  "nom": "AMD Ryzen 7 7800X3D",
-  "categorie": "Processeur",
-  "marque": "AMD",
-  "prix": 399.99,
-  "stock": 25,
-  "specifications": {
-    "socket": "AM5",
-    "coeurs": 8,
-    "threads": 16,
-    "frequence_ghz": 4.2,
-    "cache_mb": 96
-  },
-  "tags": ["Gaming", "AMD", "Ryzen"],
-  "produits_compatibles": ["PROD003"]
-}
+Exemple :
+
+```text
+Clé : panier:USER001
+
+PROD001 → 2
+PROD002 → 1
 ```
 
-### 3.3. Choix Embedded et References
+Cette structure permet d'accéder directement au panier d'un utilisateur sans parcourir les paniers des autres clients.
 
-Deux stratégies de modélisation ont été utilisées.
+### 4.3. Commandes utilisées
 
-**Embedded :** les caractéristiques techniques sont intégrées directement dans chaque document `produits`, grâce au champ `specifications`. Cette approche permet de récupérer les informations du produit en une seule lecture.
+Création d'un panier :
 
-**References :** les avis sont conservés dans une collection distincte `avis`, avec un champ `produit_id` permettant de retrouver le produit concerné. Cela évite d'augmenter indéfiniment la taille des documents produits lorsque les clients publient de nouveaux avis.
-
-Les compatibilités sont représentées par un tableau d'identifiants `produits_compatibles`. Par exemple, `PROD001` référence `PROD003`, une carte mère compatible.
-
-### 3.4. Requêtes et index
-
-Exemple de recherche de processeurs AMD :
-
-```javascript
-db.produits.find({
-  categorie: "Processeur",
-  marque: "AMD"
-})
+```redis
+HSET panier:USER001 PROD001 2 PROD002 1
 ```
 
-Exemple de filtrage sur une caractéristique technique :
+Consultation du panier :
 
-```javascript
-db.produits.find({
-  "specifications.socket": "AM5"
-})
+```redis
+HGETALL panier:USER001
 ```
 
-Exemple de récupération des avis associés à un produit :
+Augmentation de la quantité d'un produit :
 
-```javascript
-db.produits.aggregate([
-  {
-    $lookup: {
-      from: "avis",
-      localField: "_id",
-      foreignField: "produit_id",
-      as: "avis_clients"
-    }
-  }
-])
+```redis
+HINCRBY panier:USER001 PROD001 1
 ```
 
-Un index sur `avis.produit_id` a été créé pour accélérer les recherches d'avis par produit.
+Définition d'une expiration de 24 heures :
 
-Les données et les requêtes de ce lot sont disponibles dans le dossier `mongodb/` du dépôt GitHub.
+```redis
+EXPIRE panier:USER001 86400
+```
 
-### 3.5. Compromis techniques
+Redis permet ainsi de modifier les quantités de manière atomique à l'aide de `HINCRBY`.
 
-Le modèle documentaire est adapté aux produits possédant des caractéristiques variables et facilite l'évolution du catalogue.
+### 4.4. Gestion des sessions
 
-Cependant, les références entre collections nécessitent parfois des opérations de jointure avec `$lookup`. De plus, MongoDB ne garantit pas automatiquement l'intégrité des références entre documents : leur cohérence doit être contrôlée par l'application.
+Les sessions sont également représentées par des Hash Redis.
 
-Pour ce projet, la séparation des avis et l'intégration des spécifications représentent un compromis entre simplicité de lecture, souplesse et évolutivité.
+Exemple de création :
+
+```redis
+HSET session:SESSION001 user_id USER001 statut connecte role client
+```
+
+Une durée de validité de 30 minutes est définie :
+
+```redis
+EXPIRE session:SESSION001 1800
+```
+
+Lorsqu'un utilisateur se déconnecte, la session peut être supprimée :
+
+```redis
+DEL session:SESSION001
+```
+
+Le mécanisme TTL (Time To Live) évite de conserver indéfiniment des sessions devenues inutiles.
+
+### 4.5. Compromis techniques
+
+Redis offre un accès très rapide aux paniers et sessions et facilite la gestion de données temporaires.
+
+Cependant, son fonctionnement principalement en mémoire implique une attention particulière à la consommation de RAM.
+
+La persistance doit également être configurée selon les besoins de disponibilité et de récupération des données. Sans stratégie de persistance adaptée, certaines données peuvent être perdues lors d'un incident.
+
+Dans une architecture e-commerce réelle, les commandes validées devraient être enregistrées dans un stockage durable distinct du panier temporaire.
+
+Dans ce projet, les commandes Redis et leur utilisation sont documentées dans `redis/commandes.redis` et `docs/lot2_redis.md`.
 ```
