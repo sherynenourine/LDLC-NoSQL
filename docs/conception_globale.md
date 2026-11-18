@@ -1,109 +1,93 @@
 
-## 5. Lot 3 — Cassandra : logs et analytics
+## 6. Lot 4 — Neo4j : recommandations produits
 
-### 5.1. Besoin métier et choix technologique
+### 6.1. Besoin métier et choix technologique
 
-Une plateforme e-commerce génère de nombreux événements : consultations de produits, interactions des utilisateurs et commandes.
+Une plateforme e-commerce doit pouvoir recommander des produits pertinents à ses clients. Ces recommandations peuvent reposer sur la compatibilité entre composants, la similarité des caractéristiques ou les achats fréquemment réalisés ensemble.
 
-Ces informations peuvent être utilisées pour analyser l'activité du site, identifier les produits populaires et consulter l'historique des achats.
+Neo4j est une base NoSQL orientée graphe qui permet de représenter les entités sous forme de nœuds et leurs relations sous forme de liens.
 
-Apache Cassandra est une base NoSQL de type wide-column, conçue pour gérer des volumes importants de données réparties sur plusieurs nœuds.
+Cette approche facilite l'exploration des connexions entre produits sans multiplier les jointures complexes.
 
-Elle privilégie les écritures distribuées, la disponibilité et une modélisation orientée requêtes.
+Dans notre projet, Neo4j est exécuté dans un conteneur Docker nommé `neo4j-ldlc`.
 
-Dans notre projet, Cassandra est exécuté dans Docker et le keyspace `ldlc_analytics` a été créé.
+### 6.2. Modélisation du graphe
 
-### 5.2. Modélisation orientée requêtes
+Le graphe contient quatre nœuds `Produit`, correspondant aux références du catalogue MongoDB :
 
-Contrairement à une base relationnelle, Cassandra encourage la création de tables adaptées aux requêtes prévues.
-
-Nous avons créé quatre tables :
-
-| Table | Objectif |
+| Identifiant | Produit |
 |---|---|
-| `logs_par_produit` | Consulter les événements associés à un produit et à une journée |
-| `vues_par_produit` | Compter les consultations d'un produit par jour |
-| `top_produits_semaine` | Consulter un classement hebdomadaire de produits |
-| `commandes_par_client` | Retrouver les commandes d'un client |
+| PROD001 | AMD Ryzen 7 7800X3D |
+| PROD002 | Samsung Odyssey G5 27 pouces |
+| PROD003 | MSI B650 Gaming Plus WiFi |
+| PROD004 | AMD Ryzen 5 7600X |
 
-Cette organisation permet de lire les données directement selon les besoins métier, sans multiplier les jointures.
+Trois types de relations ont été modélisés :
 
-### 5.3. Clés de partition et clustering
+- `COMPATIBLE_AVEC` : indique qu'un produit est compatible avec un autre.
+- `SIMILAIRE_A` : représente une similarité entre deux produits.
+- `ACHETE_AVEC` : indique que deux produits ont été achetés ensemble.
 
-Les clés de partition déterminent la répartition des données entre les nœuds Cassandra.
+Exemples de relations créées :
 
-Les colonnes de clustering organisent les lignes à l'intérieur d'une partition.
-
-Dans `logs_par_produit`, la clé de partition est composée de `produit_id` et `jour`. Le champ `event_id`, de type `timeuuid`, sert à ordonner les événements dans chaque partition.
-
-Dans `commandes_par_client`, les données sont partitionnées par `client_id`, puis ordonnées par `date_commande` décroissante afin de retrouver les commandes récentes.
-
-Ces choix facilitent les lectures ciblées et limitent les recherches sur l'ensemble des données.
-
-### 5.4. Requêtes CQL
-
-Exemple de consultation des événements d'un produit sur une journée :
-
-```sql
-SELECT *
-FROM ldlc_analytics.logs_par_produit
-WHERE produit_id = 'PROD001'
-  AND jour = '2026-11-18';
+```text
+PROD001 --COMPATIBLE_AVEC--> PROD003
+PROD001 --SIMILAIRE_A-----> PROD004
+PROD001 --ACHETE_AVEC-----> PROD003
 ```
 
-Exemple de consultation des vues d'un produit :
+La relation `ACHETE_AVEC` possède une propriété `nombre_achats` fixée à 150 dans notre jeu de démonstration.
 
-```sql
-SELECT *
-FROM ldlc_analytics.vues_par_produit
-WHERE produit_id = 'PROD001';
+### 6.3. Requêtes Cypher
+
+Neo4j utilise le langage Cypher pour créer et interroger les graphes.
+
+Exemple de recherche des produits compatibles avec `PROD001` :
+
+```cypher
+MATCH (p:Produit {id: "PROD001"})-[:COMPATIBLE_AVEC]->(compatible:Produit)
+RETURN compatible;
 ```
 
-Exemple de récupération du classement des produits d'une semaine :
+Exemple de recherche des produits similaires :
 
-```sql
-SELECT *
-FROM ldlc_analytics.top_produits_semaine
-WHERE semaine = '2026-W47';
+```cypher
+MATCH (p:Produit {id: "PROD001"})-[:SIMILAIRE_A]->(similaire:Produit)
+RETURN similaire;
 ```
 
-Exemple de consultation des commandes d'un client :
+Exemple de récupération des produits achetés ensemble :
 
-```sql
-SELECT *
-FROM ldlc_analytics.commandes_par_client
-WHERE client_id = 'USER001';
+```cypher
+MATCH (p:Produit {id: "PROD001"})-[r:ACHETE_AVEC]->(autre:Produit)
+RETURN autre, r.nombre_achats;
 ```
 
-Ces requêtes illustrent le principe de modélisation orientée accès : les tables sont conçues pour répondre à des besoins précis.
+### 6.4. Recommandations pondérées
 
-### 5.5. Compteurs et données analytiques
+Un système de recommandation a été testé en attribuant un poids aux différents types de relations.
 
-La table `vues_par_produit` utilise un compteur Cassandra pour représenter le nombre de consultations.
+Dans notre jeu de données, le calcul donne les résultats suivants :
 
-Exemple d'incrémentation :
+| Produit recommandé | Score |
+|---|---|
+| PROD003 — MSI B650 Gaming Plus WiFi | 8 |
+| PROD004 — AMD Ryzen 5 7600X | 2 |
 
-```sql
-UPDATE ldlc_analytics.vues_par_produit
-SET nb_vues = nb_vues + 1
-WHERE produit_id = 'PROD001'
-  AND jour = '2026-11-18';
-```
+Le produit `PROD003` obtient le score le plus élevé car il est lié à `PROD001` par plusieurs relations pertinentes.
 
-Les compteurs permettent d'accumuler les consultations, mais nécessitent une attention particulière : les répétitions d'opérations peuvent entraîner des comptages supplémentaires.
+Cette méthode constitue un prototype de recommandation basé sur des règles métiers. Il ne s'agit pas d'un modèle de machine learning entraîné sur des données réelles.
 
-Le classement hebdomadaire est représenté par une table dédiée, alimentée avec des résultats de classement déjà calculés. Il ne correspond pas à une agrégation automatique réalisée par Cassandra.
+### 6.5. Compromis techniques
 
-### 5.6. Compromis techniques
+Neo4j est particulièrement adapté aux recherches impliquant plusieurs relations entre entités.
 
-Cassandra permet de distribuer les données et d'assurer des écritures efficaces à grande échelle.
+Il offre une représentation intuitive des compatibilités et facilite l'ajout de nouveaux types de relations.
 
-Cependant, son modèle impose de connaître les requêtes principales à l'avance. Une nouvelle requête métier peut nécessiter la création d'une table supplémentaire.
+Cependant, le maintien d'une base graphe distincte implique une synchronisation avec le catalogue MongoDB. Les identifiants produits doivent notamment rester cohérents entre les deux bases.
 
-La duplication de données est donc acceptée pour optimiser les accès.
+De plus, la pertinence des recommandations dépend de la qualité des relations et des pondérations définies.
 
-Concernant le théorème CAP, Cassandra privilégie une architecture distribuée tolérante aux partitions réseau. Le compromis entre cohérence et disponibilité dépend notamment du niveau de cohérence configuré pour les opérations.
+Dans ce projet, les relations et les scores ont été construits à partir d'un jeu de démonstration limité à quatre produits.
 
-Dans notre projet, un seul conteneur Cassandra a été utilisé pour les tests. Les propriétés de distribution et de tolérance aux pannes d'un véritable cluster n'ont donc pas été évaluées.
-
-Les scripts et explications complémentaires figurent dans `cassandra/requetes.cql` et `docs/lot3_cassandra.md`.
+Les requêtes Cypher sont disponibles dans `neo4j/requetes.cypher`, avec les explications du lot dans `docs/lot4_neo4j.md`.
