@@ -1,94 +1,109 @@
 
-## 4. Lot 2 — Redis : paniers et sessions utilisateurs
+## 5. Lot 3 — Cassandra : logs et analytics
 
-### 4.1. Besoin métier et choix technologique
+### 5.1. Besoin métier et choix technologique
 
-Une plateforme e-commerce doit permettre aux utilisateurs d'ajouter des produits à leur panier, de modifier leurs quantités et de conserver une session pendant leur navigation.
+Une plateforme e-commerce génère de nombreux événements : consultations de produits, interactions des utilisateurs et commandes.
 
-Ces données sont fréquemment consultées et modifiées. Elles nécessitent un accès rapide et peuvent avoir une durée de vie limitée.
+Ces informations peuvent être utilisées pour analyser l'activité du site, identifier les produits populaires et consulter l'historique des achats.
 
-Redis est une base NoSQL clé-valeur principalement utilisée en mémoire. Elle est adaptée à ce besoin grâce à ses faibles latences, ses structures de données et son mécanisme d'expiration automatique.
+Apache Cassandra est une base NoSQL de type wide-column, conçue pour gérer des volumes importants de données réparties sur plusieurs nœuds.
 
-Dans ce projet, Redis est exécuté dans un conteneur Docker nommé `redis-ldlc`.
+Elle privilégie les écritures distribuées, la disponibilité et une modélisation orientée requêtes.
 
-### 4.2. Modélisation des paniers
+Dans notre projet, Cassandra est exécuté dans Docker et le keyspace `ldlc_analytics` a été créé.
 
-Les paniers sont stockés sous forme de Hash Redis.
+### 5.2. Modélisation orientée requêtes
 
-Chaque panier possède une clé construite selon le modèle `panier:USER_ID`. Les champs correspondent aux identifiants des produits et les valeurs aux quantités sélectionnées.
+Contrairement à une base relationnelle, Cassandra encourage la création de tables adaptées aux requêtes prévues.
 
-Exemple :
+Nous avons créé quatre tables :
 
-```text
-Clé : panier:USER001
+| Table | Objectif |
+|---|---|
+| `logs_par_produit` | Consulter les événements associés à un produit et à une journée |
+| `vues_par_produit` | Compter les consultations d'un produit par jour |
+| `top_produits_semaine` | Consulter un classement hebdomadaire de produits |
+| `commandes_par_client` | Retrouver les commandes d'un client |
 
-PROD001 → 2
-PROD002 → 1
+Cette organisation permet de lire les données directement selon les besoins métier, sans multiplier les jointures.
+
+### 5.3. Clés de partition et clustering
+
+Les clés de partition déterminent la répartition des données entre les nœuds Cassandra.
+
+Les colonnes de clustering organisent les lignes à l'intérieur d'une partition.
+
+Dans `logs_par_produit`, la clé de partition est composée de `produit_id` et `jour`. Le champ `event_id`, de type `timeuuid`, sert à ordonner les événements dans chaque partition.
+
+Dans `commandes_par_client`, les données sont partitionnées par `client_id`, puis ordonnées par `date_commande` décroissante afin de retrouver les commandes récentes.
+
+Ces choix facilitent les lectures ciblées et limitent les recherches sur l'ensemble des données.
+
+### 5.4. Requêtes CQL
+
+Exemple de consultation des événements d'un produit sur une journée :
+
+```sql
+SELECT *
+FROM ldlc_analytics.logs_par_produit
+WHERE produit_id = 'PROD001'
+  AND jour = '2026-11-18';
 ```
 
-Cette structure permet d'accéder directement au panier d'un utilisateur sans parcourir les paniers des autres clients.
+Exemple de consultation des vues d'un produit :
 
-### 4.3. Commandes utilisées
-
-Création d'un panier :
-
-```redis
-HSET panier:USER001 PROD001 2 PROD002 1
+```sql
+SELECT *
+FROM ldlc_analytics.vues_par_produit
+WHERE produit_id = 'PROD001';
 ```
 
-Consultation du panier :
+Exemple de récupération du classement des produits d'une semaine :
 
-```redis
-HGETALL panier:USER001
+```sql
+SELECT *
+FROM ldlc_analytics.top_produits_semaine
+WHERE semaine = '2026-W47';
 ```
 
-Augmentation de la quantité d'un produit :
+Exemple de consultation des commandes d'un client :
 
-```redis
-HINCRBY panier:USER001 PROD001 1
+```sql
+SELECT *
+FROM ldlc_analytics.commandes_par_client
+WHERE client_id = 'USER001';
 ```
 
-Définition d'une expiration de 24 heures :
+Ces requêtes illustrent le principe de modélisation orientée accès : les tables sont conçues pour répondre à des besoins précis.
 
-```redis
-EXPIRE panier:USER001 86400
+### 5.5. Compteurs et données analytiques
+
+La table `vues_par_produit` utilise un compteur Cassandra pour représenter le nombre de consultations.
+
+Exemple d'incrémentation :
+
+```sql
+UPDATE ldlc_analytics.vues_par_produit
+SET nb_vues = nb_vues + 1
+WHERE produit_id = 'PROD001'
+  AND jour = '2026-11-18';
 ```
 
-Redis permet ainsi de modifier les quantités de manière atomique à l'aide de `HINCRBY`.
+Les compteurs permettent d'accumuler les consultations, mais nécessitent une attention particulière : les répétitions d'opérations peuvent entraîner des comptages supplémentaires.
 
-### 4.4. Gestion des sessions
+Le classement hebdomadaire est représenté par une table dédiée, alimentée avec des résultats de classement déjà calculés. Il ne correspond pas à une agrégation automatique réalisée par Cassandra.
 
-Les sessions sont également représentées par des Hash Redis.
+### 5.6. Compromis techniques
 
-Exemple de création :
+Cassandra permet de distribuer les données et d'assurer des écritures efficaces à grande échelle.
 
-```redis
-HSET session:SESSION001 user_id USER001 statut connecte role client
-```
+Cependant, son modèle impose de connaître les requêtes principales à l'avance. Une nouvelle requête métier peut nécessiter la création d'une table supplémentaire.
 
-Une durée de validité de 30 minutes est définie :
+La duplication de données est donc acceptée pour optimiser les accès.
 
-```redis
-EXPIRE session:SESSION001 1800
-```
+Concernant le théorème CAP, Cassandra privilégie une architecture distribuée tolérante aux partitions réseau. Le compromis entre cohérence et disponibilité dépend notamment du niveau de cohérence configuré pour les opérations.
 
-Lorsqu'un utilisateur se déconnecte, la session peut être supprimée :
+Dans notre projet, un seul conteneur Cassandra a été utilisé pour les tests. Les propriétés de distribution et de tolérance aux pannes d'un véritable cluster n'ont donc pas été évaluées.
 
-```redis
-DEL session:SESSION001
-```
-
-Le mécanisme TTL (Time To Live) évite de conserver indéfiniment des sessions devenues inutiles.
-
-### 4.5. Compromis techniques
-
-Redis offre un accès très rapide aux paniers et sessions et facilite la gestion de données temporaires.
-
-Cependant, son fonctionnement principalement en mémoire implique une attention particulière à la consommation de RAM.
-
-La persistance doit également être configurée selon les besoins de disponibilité et de récupération des données. Sans stratégie de persistance adaptée, certaines données peuvent être perdues lors d'un incident.
-
-Dans une architecture e-commerce réelle, les commandes validées devraient être enregistrées dans un stockage durable distinct du panier temporaire.
-
-Dans ce projet, les commandes Redis et leur utilisation sont documentées dans `redis/commandes.redis` et `docs/lot2_redis.md`.
-```
+Les scripts et explications complémentaires figurent dans `cassandra/requetes.cql` et `docs/lot3_cassandra.md`.
